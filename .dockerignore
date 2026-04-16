@@ -1,0 +1,174 @@
+# ===================
+# Docker 构建忽略文件
+# ===================
+# 此文件指定在 Docker 构建过程中不需要复制到镜像中的文件和目录
+# 可以显著减小镜像体积，加快构建速度，并避免敏感信息泄露
+
+# ===================
+# Python 相关
+# ===================
+# 虚拟环境目录
+.venv/
+venv/
+env/
+ENV/
+.conda/
+conda/
+mamba/
+mambaforge/
+miniconda/
+anaconda/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.pdm.toml
+pep8.ignored
+
+# 安装的依赖包
+site-packages/
+dist/
+build/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+develop-eggs/
+.installed.cfg
+*.egg-info/
+*.egg
+
+# ===================
+# IDE 和编辑器
+# ===================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ===================
+# Git
+# ===================
+.git/
+.gitignore
+.gitattributes
+.gitmodules
+
+# ===================
+# 测试和文档
+# ===================
+tests/
+test/
+docs/
+doc/
+*.md  # 排除所有markdown文件（Dockerfile中显式复制了README.md）
+
+# ===================
+# 临时文件
+# ===================
+temp/
+tmp/
+.tmp/
+.cache/
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ===================
+# 日志文件
+# ===================
+*.log
+logs/
+log/
+
+# ===================
+# 数据文件（运行时生成）
+# ===================
+# 数据库文件（运行时创建，通过volume挂载）
+*.db
+*.sqlite
+*.sqlite3
+data/
+uploads/
+
+# ===================
+# 环境和密钥文件
+# ===================
+.env
+.env.*
+!.env.example
+config.yaml
+config.yml
+secrets/
+credentials.json
+key.pem
+cert.pem
+*.pem
+*.key
+*.crt
+
+# ===================
+# CI/CD 配置
+# ===================
+.github/
+.gitlab-ci.yml
+.travis.yml
+.circleci/
+ Jenkinsfile
+.gitlab/
+.ci/
+
+# ===================
+# Docker 相关
+# ===================
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+docker/
+container/
+
+# ===================
+# 系统文件
+# ===================
+Thumbs.db
+Desktop.ini
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.Trashes
+
+# ===================
+# 模型文件（如果使用本地embedding模型）
+# ===================
+models/
+*.bin
+*.pt
+*.pth
+*.onnx
+*.tflite
+*.h5
+
+# ===================
+# 打包和发布文件
+# ===================
+dist/
+wheelhouse/
+.whl
+.tar.gz
+.zip
+*.egg

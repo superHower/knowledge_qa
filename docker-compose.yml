@@ -1,0 +1,215 @@
+# ===================
+# Docker Compose 编排配置
+# ===================
+# 使用 docker-compose 编排多个服务：
+# 1. knowledge-qa: 主应用服务
+# 2. qdrant: 向量数据库服务
+# 3. 可选：nginx（反向代理/SSL）
+
+version: '3.8'
+
+# ===================
+# 全局环境变量
+# ===================
+# 定义所有服务可用的环境变量
+x-common-variables: &common-variables
+  # 应用配置
+  APP_NAME: "Knowledge QA Agent"
+  APP_VERSION: "0.1.0"
+  DEBUG: "false"
+
+  # OpenAI API 配置（用户需要自行设置）
+  # 注意：生产环境建议使用环境变量注入，不要硬编码
+  OPENAI_API_KEY: "${OPENAI_API_KEY}"
+  OPENAI_BASE_URL: "${OPENAI_BASE_URL}"
+  OPENAI_MODEL: "${OPENAI_MODEL:-gpt-4o-mini}"
+  OPENAI_EMBEDDING_MODEL: "${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}"
+
+  # LLM 参数
+  LLM_TEMPERATURE: "${LLM_TEMPERATURE:-0.7}"
+  LLM_MAX_TOKENS: "${LLM_MAX_TOKENS:-2000}"
+
+  # Qdrant 向量数据库配置
+  # 使用服务名 "qdrant" 作为主机名（Docker DNS解析）
+  QDRANT_HOST: "qdrant"
+  QDRANT_PORT: "6400"
+  QDRANT_COLLECTION_NAME: "knowledge_base"
+
+  # 文档处理
+  UPLOAD_DIR: "./uploads"
+  CHUNK_SIZE: "${CHUNK_SIZE:-512}"
+  CHUNK_OVERLAP: "${CHUNK_OVERLAP:-50}"
+
+  # RAG 配置
+  TOP_K: "${TOP_K:-5}"
+  SIMILARITY_THRESHOLD: "${SIMILARITY_THRESHOLD:-0.5}"
+
+  # 数据库
+  # MySQL 容器提供服务（通过服务名 "mysql" 访问）
+  DATABASE_URL: "mysql+aiomysql://root:123456@mysql:3306/knowledge_qa?charset=utf8mb4"
+
+  # 日志
+  LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+  LOG_FILE: "./logs/app.log"
+
+# ===================
+# 服务定义
+# ===================
+services:
+  # ===================
+  # 主应用服务
+  # ===================
+  knowledge-qa:
+    # 构建配置
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # 构建参数（可选）
+      args:
+        BUILD_DATE: ${BUILD_DATE}
+        VCS_REF: ${VCS_REF}
+    # 容器名称
+    container_name: knowledge-qa-app
+    # 重启策略：总是重启（除非手动停止）
+    restart: unless-stopped
+    # 端口映射：主机端口:容器端口
+    # 将容器的8000端口映射到主机的8000端口
+    # Windows/Mac用户可以根据需要修改左侧端口（如 8080:8000）
+    ports:
+      - "8000:8000"
+    # 环境变量（合并全局变量和service-specific变量）
+    environment:
+      <<: *common-variables
+      # 开发模式（设置为true启用热重载，生产环境应设为false）
+      DEBUG: "${DEBUG:-false}"
+    # 卷挂载：实现数据持久化
+    volumes:
+      # 上传文件持久化（用户上传的文档）
+      - ./uploads:/app/uploads
+      # 日志持久化
+      - ./logs:/app/logs
+    # 网络配置
+    networks:
+      - knowledge-qa-network
+    # 依赖关系：确保 mysql 和 qdrant 服务先启动
+    depends_on:
+      mysql:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    # 资源限制（可选，根据实际需求调整）
+    deploy:
+      resources:
+        limits:
+          # 内存限制
+          memory: 2G
+        reservations:
+          # 内存预留
+          memory: 1G
+    # 健康检查（复用Dockerfile中的HEALTHCHECK指令）
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ===================
+  # MySQL 数据库
+  # ===================
+  mysql:
+    # 使用官方MySQL镜像
+    image: mysql:8.4
+    # 容器名称
+    container_name: knowledge-qa-mysql
+    # 重启策略
+    restart: unless-stopped
+    # 端口映射（可选）
+    ports:
+      - "3306:3306"   # 主机端口:容器端口
+    # 环境变量配置
+    environment:
+      # MySQL root 密码（生产环境务必修改！）
+      MYSQL_ROOT_PASSWORD: "123456"
+      # 默认数据库名
+      MYSQL_DATABASE: "knowledge_qa"
+      # 字符集配置
+      MYSQL_CHARSET: "utf8mb4"
+      MYSQL_COLLATION: "utf8mb4_unicode_ci"
+    # 卷挂载：数据持久化 + 配置 + 初始化脚本
+    volumes:
+      # MySQL 数据持久化
+      - mysql-data:/var/lib/mysql
+      # 配置文件（可选）
+      - ./docker/mysql/my.cnf:/etc/mysql/conf.d/custom.cnf:ro
+      # 初始化脚本（自动创建表结构）
+      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    # 网络配置
+    networks:
+      - knowledge-qa-network
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p123456"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ===================
+  # Qdrant 向量数据库
+  # ===================
+  qdrant:
+    # 使用官方Qdrant镜像
+    image: qdrant/qdrant:v1.9.0
+    # 容器名称
+    container_name: knowledge-qa-qdrant
+    # 重启策略
+    restart: unless-stopped
+    # 端口映射（可选：如果用户需要在主机直接访问Qdrant）
+    ports:
+      - "6400:6333"   # REST API端口
+      - "6334:6334"   # gRPC端口（可选）
+    # 卷挂载：向量数据持久化
+    volumes:
+      - qdrant-data:/qdrant/storage
+      - qdrant-config:/qdrant/config
+    # 网络配置
+    networks:
+      - knowledge-qa-network
+    # 环境变量配置
+    environment:
+      # Qdrant配置
+      QDRANT__SERVICE__HTTP_PORT: "6400"
+      QDRANT__SERVICE__GRPC_PORT: "6334"
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6400/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+# ===================
+# 网络定义
+# ===================
+networks:
+  # 创建自定义网络，服务间通过服务名通信
+  knowledge-qa-network:
+    driver: bridge
+    # 可选：添加网络别名
+    # aliases:
+    #   - kb-qa.local
+
+# ===================
+# 卷定义
+# ===================
+volumes:
+  # MySQL数据卷（数据库持久化）
+  mysql-data:
+    driver: local
+  # Qdrant数据卷（向量数据持久化）
+  qdrant-data:
+    driver: local
+  # Qdrant配置卷
+  qdrant-config:
+    driver: local
