@@ -1,122 +1,253 @@
-# Knowledge QA Agent - Docker 快速部署
+# Docer-Build
+## 当前部署架构
 
-**三容器架构：FastAPI（8000）+ MySQL（3306）+ Qdrant（6400）**
+基于 [docker-compose.yml](file:///d:/MyWork/project-agent/code/knowledge_qa/docker-compose.yml) ，当前项目包含以下服务：
 
----
+| 服务 | Compose 服务名 | 默认端口 | 作用 |
+| --- | --- | --- | --- |
+| 应用服务 | `knowledge-qa` | `8000` | FastAPI API、文档处理、RAG、Agent |
+| MySQL | `mysql` | `3306` | 业务元数据、知识库、文档、会话 |
+| Qdrant | `qdrant` | `6400` | 向量检索与切片索引 |
 
-## 🎯 3 步部署（客户操作流程）
+容器间通过 Docker 网络内服务名通信：
 
-### 1️⃣ 安装 Docker Desktop
+- 应用访问 MySQL：`mysql:3306`
+- 应用访问 Qdrant：`qdrant:6400`
 
-- **Windows/macOS**：下载 [Docker Desktop](https://www.docker.com/products/docker-desktop/) 并安装
-- **Linux**：`sudo apt install docker-ce docker-compose-plugin`
+## 构建前准备
 
-验证：`docker --version`
+### 1. 安装 Docker
 
-### 2️⃣ 配置 API 密钥
+- Windows/macOS：安装 [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- Linux：安装 Docker Engine 和 Compose Plugin
+
+验证命令：
 
 ```bash
-cd /path/to/knowledge_qa
+docker --version
+docker compose version
+```
+
+### 2. 准备环境变量
+
+在项目根目录执行：
+
+```bash
 cp .env.example .env
-vim .env   # 或 notepad .env（Windows）
 ```
 
-**只需改一行：**
+开发人员至少检查这些变量：
+
 ```env
-OPENAI_API_KEY=sk-customer-api-key-here
+OPENAI_API_KEY=your-api-key
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+LOG_LEVEL=INFO
 ```
 
-### 3️⃣ 启动服务
+说明：
+
+- `docker-compose.yml` 会将 `OPENAI_*`、`LLM_*`、`TOP_K` 等参数注入应用容器
+- 当前 Compose 文件中的 `DATABASE_URL` 已固定为容器内 MySQL 地址
+- 本地非 Docker 启动使用的 `.env` 与 Docker Compose 环境变量是两套加载方式，不冲突
+
+### 3. 检查目录
+
+确保项目目录存在以下内容：
+
+- [Dockerfile](file:///d:/MyWork/project-agent/code/knowledge_qa/Dockerfile)
+- [docker-compose.yml](file:///d:/MyWork/project-agent/code/knowledge_qa/docker-compose.yml)
+- [.env.example](file:///d:/MyWork/project-agent/code/knowledge_qa/.env.example)
+- [docker/mysql/my.cnf](file:///d:/MyWork/project-agent/code/knowledge_qa/docker/mysql/my.cnf)
+- [docker/mysql/init.sql](file:///d:/MyWork/project-agent/code/knowledge_qa/docker/mysql/init.sql)
+
+## 标准构建流程
+
+### 1. 构建应用镜像
 
 ```bash
-docker-compose up -d
-sleep 20
-curl http://localhost:8000/api/v1/health
-# 看到 {"status":"ok"} 即成功 ✅
+docker compose build knowledge-qa
 ```
 
-访问：http://localhost:8000/docs
-
----
-
-## 📦 三容器说明
-
-| 容器 | 端口 | 用途 | 数据持久化 |
-|------|------|------|-----------|
-| `knowledge-qa` | 8000 | FastAPI 应用 | `./uploads`, `./logs` |
-| `mysql` | 3306 | MySQL 数据库 | `mysql-data` Volume |
-| `qdrant` | 6400 | 向量数据库 | `qdrant-data` Volume |
-
-**通信方式：** Docker 内部 DNS 自动解析（`mysql`、`qdrant`）
-
----
-
-## 🔌 OpenClaw 集成
-
-```json
-{
-  "name": "knowledge_qa_agent",
-  "type": "http_api",
-  "config": {
-    "base_url": "http://localhost:8000",
-    "timeout": 60
-  }
-}
-```
-
-**核心接口：**
-- 问答：`POST /api/v1/chat`
-- 流式：`POST /api/v1/chat/stream`
-- 管理：`POST /api/v1/knowledge-bases`、`POST /api/v1/documents`
-
----
-
-## 🛠️ 常用命令
+如果需要写入构建元信息：
 
 ```bash
-docker-compose up -d          # 启动
-docker-compose down           # 停止
-docker-compose logs -f        # 查看日志
-docker-compose restart        # 重启
-docker-compose ps             # 查看状态
-
-# 进入容器
-docker-compose exec knowledge-qa bash
-docker-compose exec mysql mysql -uroot -p123456
+set BUILD_DATE=2026-04-17
+set VCS_REF=local-dev
+docker compose build knowledge-qa
 ```
 
----
+PowerShell：
 
-## ❓ 常见问题
+```powershell
+$env:BUILD_DATE="2026-04-17"
+$env:VCS_REF="local-dev"
+docker compose build knowledge-qa
+```
 
-### 端口被占用
-修改 `docker-compose.yml` 中的端口映射，如 `"8080:8000"`，重启。
+### 2. 启动完整编排
 
-### OpenAI API 失败
-检查 `.env` 中的 `OPENAI_API_KEY`，确保密钥有效。
-
-### MySQL 连接失败
 ```bash
-docker-compose logs mysql     # 查看日志
-docker-compose restart mysql  # 重启
-# 首次启动可能需要 30-60 秒
+docker compose up -d
 ```
 
-### 数据备份
+首次启动建议等待 30 到 60 秒，原因：
+
+- MySQL 首次初始化会创建数据库目录
+- Qdrant 需要准备存储目录
+- 应用启动时会执行 `init_db()`
+
+### 3. 查看状态
+
 ```bash
-# 备份 MySQL
-docker-compose exec mysql mysqldump -uroot -p123456 knowledge_qa > backup.sql
-
-# 恢复
-cat backup.sql | docker-compose exec -T mysql mysql -uroot -p123456 knowledge_qa
+docker compose ps
 ```
 
----
+### 4. 查看日志
 
-## 📞 技术支持
+```bash
+docker compose logs -f knowledge-qa
+docker compose logs -f mysql
+docker compose logs -f qdrant
+```
 
-1. 日志：`docker-compose logs -f`
-2. API 文档：http://localhost:8000/docs
-3. 健康检查：`curl http://localhost:8000/api/v1/health`
+## 部署验证
 
-详细文档见 `README-DEPLOY.md`
+### 1. 接口验证
+
+```bash
+curl http://localhost:8000/health
+```
+
+## 开发环境常用命令
+
+### 启动与停止
+
+```bash
+docker compose up -d
+docker compose down
+docker compose down -v
+```
+
+## 升级流程
+
+### 代码升级
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+### 升级前备份 MySQL
+
+```bash
+docker compose exec mysql mysqldump -uroot -p123456 knowledge_qa > backup.sql
+```
+
+### 恢复 MySQL
+
+```bash
+cat backup.sql | docker compose exec -T mysql mysql -uroot -p123456 knowledge_qa
+```
+# README-DEPLOY
+
+面向客户的运行说明。本文档不讨论源码结构和内部实现，只告诉客户如何在自己的电脑上把项目跑起来并访问可用页面。
+
+## 适用对象
+
+- 最终客户
+- 现场实施人员
+- 不参与项目开发、只需要运行系统的人
+
+## 客户需要准备什么
+
+客户只需要准备 3 样东西：
+
+1. 一台能安装 Docker 的电脑
+2. 项目文件夹 `knowledge_qa`
+3. 一个可用的模型 API Key
+
+## 运行方式
+
+当前项目推荐使用 Docker Compose 运行，启动后会自动带起：
+
+- 应用服务
+- MySQL 数据库
+- Qdrant 向量库
+
+客户不需要单独安装 Python、MySQL 或 Qdrant。
+
+## 第一步：安装 Docker
+
+### Windows
+
+1. 安装 [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+2. 安装完成后启动 Docker Desktop
+3. 打开 PowerShell，执行：
+
+```powershell
+docker --version
+docker compose version
+```
+
+### macOS
+
+1. 安装 Docker Desktop
+2. 启动 Docker Desktop
+3. 打开终端执行：
+
+```bash
+docker --version
+docker compose version
+```
+
+### Linux
+
+自行安装 Docker Engine 与 Compose Plugin，确认以下命令可用：
+
+```bash
+docker --version
+docker compose version
+```
+
+## 第二步：进入项目目录
+
+```bash
+cd knowledge_qa
+```
+
+## 第三步：配置 `.env`
+
+如果目录里还没有 `.env`，先从模板复制一份：
+
+```bash
+cp .env.example .env
+```
+
+Windows 可以直接复制文件后重命名。
+
+客户通常只需要重点检查以下配置：
+
+```env
+OPENAI_API_KEY=你的真实密钥
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+```
+
+如果使用兼容 OpenAI 的其他模型平台，也可以改成对应地址和模型名。
+
+## 第四步：启动项目
+
+在项目根目录执行：
+
+```bash
+docker compose up -d
+```
+
+## 第五步：确认是否启动成功
+
+```bash
+docker compose ps
+```

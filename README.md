@@ -25,231 +25,6 @@
 | **重排序**    | `rag/reranker.py`      | BaseReranker 基类；CrossEncoderReranker（Cross-Encoder 精排）、TfidfReranker（BM25）、ReciprocalRankReranker（RRF 融合）、ScoreWeightedReranker（分数加权）     |
 | **质量评估**  | `rag/evaluator.py`     | RetrievalEvaluator（Precision/Recall/MRR/NDCG）、QualityMonitor（持续监控、阈值告警）                                                                           |
 
-### 文档处理
-
-| 模块               | 文件                      | 功能说明                                                                                                       |
-| ------------------ | ------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| **解析器**   | `document/parsers.py`   | TextParser（TXT/Markdown）、PDFParser、DocxParser、HTMLParser、CSVParser；ParserFactory 工厂模式               |
-| **切片器**   | `document/splitter.py`  | TextSplitter，递归语义切片，支持重叠；`document/structured_splitter.py` 结构感知切片，感知标题层级、章节边界 |
-| **文档处理** | `document/processor.py` | DocumentProcessor（文档解析+切片流程）、FileStorage（文件存储管理）                                            |
-
-### 数据库
-
-| 模块                 | 文件               | 功能说明                                                                                              |
-| -------------------- | ------------------ | ----------------------------------------------------------------------------------------------------- |
-| **数据模型**   | `db/models.py`   | KnowledgeBase、Document、DocumentChunk、ChatSession、ChatMessage、PromptTemplate；SQLAlchemy 异步 ORM |
-| **数据库管理** | `db/database.py` | 异步会话管理（AsyncSessionLocal）、init_db()、drop_db()                                               |
-
-### API 接口
-
-| 模块                 | 文件                      | 功能说明                                    |
-| -------------------- | ------------------------- | ------------------------------------------- |
-| **知识库接口** | `api/knowledge_base.py` | 创建/查询/更新/删除知识库，获取统计信息     |
-| **文档接口**   | `api/document.py`       | 上传文档、流式处理、列表查询、重新处理      |
-| **对话接口**   | `api/chat.py`           | 问答对话、流式 SSE 输出、会话管理、历史记录 |
-
-### 其他
-
-| 模块              | 文件                    | 功能说明                                         |
-| ----------------- | ----------------------- | ------------------------------------------------ |
-| **配置**    | `core/config.py`      | Pydantic Settings 配置管理，环境变量加载         |
-| **Schemas** | `schemas/__init__.py` | Pydantic 请求/响应模型验证                       |
-| **服务层**  | `services/`           | KnowledgeBaseService、DocumentService 业务逻辑层 |
-
----
-
-## 项目结构
-
-```
-knowledge_qa/
-├── api/                          # API 路由
-│   ├── __init__.py
-│   ├── knowledge_base.py         # 知识库 CRUD
-│   ├── document.py               # 文档上传/处理
-│   └── chat.py                   # 对话/流式/SSE
-├── agent/                        # Agent 核心 ⭐
-│   ├── __init__.py
-│   ├── base.py                   # AgentConfig, AgentStatus, AgentResponse, BaseAgent
-│   ├── llm.py                    # OpenAILLM, ClaudeLLM, LLMFactory
-│   ├── tool.py                   # ToolRegistry, BaseTool, 各种 Tool 实现
-│   ├── memory.py                 # 短/长期/情景/反思记忆
-│   ├── planner.py                # 任务规划器
-│   ├── executor.py               # ReAct 执行循环
-│   ├── decision.py               # 置信度评估/追问/决策
-│   ├── agent.py                  # KnowledgeQAAgent 主类, AgentFactory
-│   └── prompts.py                # PromptBuilder, RefinedPromptBuilder
-├── rag/                          # RAG 模块
-│   ├── __init__.py
-│   ├── embedding.py              # Embedding 服务
-│   ├── vector_store.py           # Qdrant / 内存向量库
-│   ├── retriever.py              # AdvancedRAGRetriever 高级检索
-│   ├── reranker.py               # 重排序器
-│   ├── query_rewrite.py          # 查询改写
-│   └── evaluator.py              # 质量评估
-├── document/                     # 文档处理
-│   ├── __init__.py
-│   ├── base.py                   # BaseDocumentParser, DocumentContent
-│   ├── parsers.py                # 各种文档解析器
-│   ├── splitter.py               # TextSplitter
-│   ├── structured_splitter.py    # StructureAwareSplitter, MultiGranularityIndexer
-│   └── processor.py              # DocumentProcessor, FileStorage
-├── db/                           # 数据库
-│   ├── __init__.py
-│   ├── models.py                 # SQLAlchemy 模型
-│   └── database.py               # 异步会话管理
-├── services/                     # 业务服务层
-│   ├── __init__.py
-│   ├── knowledge_base.py         # 知识库服务
-│   └── document.py               # 文档服务
-├── schemas/                      # Pydantic Schemas
-│   └── __init__.py
-├── core/                         # 核心配置
-│   ├── __init__.py
-│   └── config.py                # Settings 配置类
-├── utils/                        # 工具函数
-│   └── __init__.py
-├── config.py                     # 全局配置
-├── main.py                       # FastAPI 应用入口
-├── pyproject.toml                # 项目配置
-├── .env.example                  # 环境变量示例
-└── .gitignore
-```
-
----
-
-## 技术栈
-
-| 类别                | 技术                                                         |
-| ------------------- | ------------------------------------------------------------ |
-| **Web 框架**  | FastAPI + Uvicorn + SQLAlchemy (异步)                        |
-| **数据验证**  | Pydantic + Pydantic-Settings                                 |
-| **LLM**       | OpenAI SDK（支持 OpenAI 兼容接口）                           |
-| **向量库**    | Qdrant Client（支持 InMemory 模式）                          |
-| **文档解析**  | pypdf, python-docx, html2text, pandas                        |
-| **Embedding** | OpenAI text-embedding（可选 sentence-transformers 本地模型） |
-| **异步处理**  | asyncio, aiomysql                                            |
-
----
-
-## 快速开始
-
-### 1. 安装依赖
-
-```bash
-cd code/knowledge_qa
-mamba create -n knowledge_qa python=3.11
-mamba activate knowledge_qa
-pip install -e .
-```
-
-或使用 pyproject.toml:
-
-```bash
-pip install poetry
-poetry install
-```
-
-### 2. 配置环境
-
-```bash
-cp .env.example .env
-```
-
-编辑 `.env` 文件：
-
-```env
-# OpenAI API
-OPENAI_API_KEY=sk-your-api-key
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-4o-mini
-OPENAI_EMBEDDING_MODEL=text-embedding-3-small
-
-# 向量数据库（可选，默认为内存模式）
-# 启动服务（默认端口 6400）
-./qdrant --config-path config/production.yaml
-
-QDRANT_HOST=localhost
-QDRANT_PORT=6400
-
-```
-
-### 3. 启动服务
-
-```bash
-# 开发模式（热重载）
-export PYTHONPATH=/Users/xkwx/dev/base/ai-platform-static/temp/code:$PYTHONPATH
-uvicorn knowledge_qa.main:app --reload --port 8000
-
-# 生产模式
-uvicorn knowledge_qa.main:app --host 0.0.0.0 --port 8000 --workers 4
-```
-
-### 4. 访问文档
-
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
-- 健康检查: http://localhost:8000/health
-
----
-
-## API 接口
-
-### 知识库管理
-
-```
-POST   /api/v1/knowledge-bases           # 创建知识库
-GET    /api/v1/knowledge-bases            # 列出知识库
-GET    /api/v1/knowledge-bases/{id}      # 获取知识库详情
-PATCH  /api/v1/knowledge-bases/{id}      # 更新知识库
-DELETE /api/v1/knowledge-bases/{id}      # 删除知识库
-GET    /api/v1/knowledge-bases/{id}/stats # 获取统计
-```
-
-### 文档管理
-
-```
-POST   /api/v1/documents?knowledge_base_id=1  # 上传文档
-GET    /api/v1/documents?knowledge_base_id=1  # 列出文档
-GET    /api/v1/documents/{id}                 # 获取文档详情
-DELETE /api/v1/documents/{id}                 # 删除文档
-POST   /api/v1/documents/{id}/reprocess       # 重新处理
-```
-
-### 对话
-
-```
-POST   /api/v1/chat                         # 普通问答
-POST   /api/v1/chat/stream                   # 流式问答 (SSE)
-GET    /api/v1/chat/sessions                 # 列出会话
-GET    /api/v1/chat/sessions/{id}            # 获取会话历史
-DELETE /api/v1/chat/sessions/{id}            # 删除会话
-```
-
-### curl 示例
-
-```bash
-# 创建知识库
-curl -X POST "http://localhost:8000/api/v1/knowledge-bases" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "产品知识库", "description": "公司产品文档"}'
-
-# 上传文档
-curl -X POST "http://localhost:8000/api/v1/documents?knowledge_base_id=1" \
-  -F "file=@./文档.pdf"
-
-# 普通问答
-curl -X POST "http://localhost:8000/api/v1/chat" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "产品的核心功能是什么？", "knowledge_base_id": 1}'
-
-# 流式问答
-curl -X POST "http://localhost:8000/api/v1/chat/stream?knowledge_base_id=1" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "产品的核心功能是什么？"}'
-```
-
----
-
 ## Agent 架构详解
 
 ### ReAct 执行流程
@@ -473,90 +248,304 @@ retriever = AdvancedRAGRetriever(
 ```
 
 ---
+### 文档处理
 
-## 使用 Docker（推荐 ⭐）
+| 模块               | 文件                      | 功能说明                                                                                                       |
+| ------------------ | ------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| **解析器**   | `document/parsers.py`   | TextParser（TXT/Markdown）、PDFParser、DocxParser、HTMLParser、CSVParser；ParserFactory 工厂模式               |
+| **切片器**   | `document/splitter.py`  | TextSplitter，递归语义切片，支持重叠；`document/structured_splitter.py` 结构感知切片，感知标题层级、章节边界 |
+| **文档处理** | `document/processor.py` | DocumentProcessor（文档解析+切片流程）、FileStorage（文件存储管理）                                            |
 
-### 三容器架构
+### 数据库
 
-本项目采用 Docker Compose 编排三个容器：
+| 模块                 | 文件               | 功能说明                                                                                              |
+| -------------------- | ------------------ | ----------------------------------------------------------------------------------------------------- |
+| **数据模型**   | `db/models.py`   | KnowledgeBase、Document、DocumentChunk、ChatSession、ChatMessage、PromptTemplate；SQLAlchemy 异步 ORM |
+| **数据库管理** | `db/database.py` | 异步会话管理（AsyncSessionLocal）、init_db()、drop_db()                                               |
+
+### API 接口
+
+| 模块                 | 文件                      | 功能说明                                    |
+| -------------------- | ------------------------- | ------------------------------------------- |
+| **知识库接口** | `api/knowledge_base.py` | 创建/查询/更新/删除知识库，获取统计信息     |
+| **文档接口**   | `api/document.py`       | 上传文档、流式处理、列表查询、重新处理      |
+| **对话接口**   | `api/chat.py`           | 问答对话、流式 SSE 输出、会话管理、历史记录 |
+
+### 其他
+
+| 模块              | 文件                    | 功能说明                                         |
+| ----------------- | ----------------------- | ------------------------------------------------ |
+| **配置**    | `core/config.py`      | Pydantic Settings 配置管理，环境变量加载         |
+| **Schemas** | `schemas/__init__.py` | Pydantic 请求/响应模型验证                       |
+| **服务层**  | `services/`           | KnowledgeBaseService、DocumentService 业务逻辑层 |
+
+---
+
+## 项目结构
 
 ```
-┌─────────────────────────────────────────────────┐
-│  knowledge-qa (FastAPI)  ← 客户访问: localhost:8000  │
-├─────────────────────────────────────────────────┤
-│  MySQL 数据库              ← 内部: mysql:3306        │
-│  Qdrant 向量库             ← 内部: qdrant:6400      │
-└─────────────────────────────────────────────────┘
+knowledge_qa/
+├── api/                          # API 路由
+│   ├── __init__.py
+│   ├── knowledge_base.py         # 知识库 CRUD
+│   ├── document.py               # 文档上传/处理
+│   └── chat.py                   # 对话/流式/SSE
+├── agent/                        # Agent 核心 ⭐
+│   ├── __init__.py
+│   ├── base.py                   # AgentConfig, AgentStatus, AgentResponse, BaseAgent
+│   ├── llm.py                    # OpenAILLM, ClaudeLLM, LLMFactory
+│   ├── tool.py                   # ToolRegistry, BaseTool, 各种 Tool 实现
+│   ├── memory.py                 # 短/长期/情景/反思记忆
+│   ├── planner.py                # 任务规划器
+│   ├── executor.py               # ReAct 执行循环
+│   ├── decision.py               # 置信度评估/追问/决策
+│   ├── agent.py                  # KnowledgeQAAgent 主类, AgentFactory
+│   └── prompts.py                # PromptBuilder, RefinedPromptBuilder
+├── rag/                          # RAG 模块
+│   ├── __init__.py
+│   ├── embedding.py              # Embedding 服务
+│   ├── vector_store.py           # Qdrant / 内存向量库
+│   ├── retriever.py              # AdvancedRAGRetriever 高级检索
+│   ├── reranker.py               # 重排序器
+│   ├── query_rewrite.py          # 查询改写
+│   └── evaluator.py              # 质量评估
+├── document/                     # 文档处理
+│   ├── __init__.py
+│   ├── base.py                   # BaseDocumentParser, DocumentContent
+│   ├── parsers.py                # 各种文档解析器
+│   ├── splitter.py               # TextSplitter
+│   ├── structured_splitter.py    # StructureAwareSplitter, MultiGranularityIndexer
+│   └── processor.py              # DocumentProcessor, FileStorage
+├── db/                           # 数据库
+│   ├── __init__.py
+│   ├── models.py                 # SQLAlchemy 模型
+│   └── database.py               # 异步会话管理
+├── services/                     # 业务服务层
+│   ├── __init__.py
+│   ├── knowledge_base.py         # 知识库服务
+│   └── document.py               # 文档服务
+├── schemas/                      # Pydantic Schemas
+│   └── __init__.py
+├── core/                         # 核心配置
+│   ├── __init__.py
+│   └── config.py                # Settings 配置类
+├── utils/                        # 工具函数
+│   └── __init__.py
+├── config.py                     # 全局配置
+├── main.py                       # FastAPI 应用入口
+├── pyproject.toml                # 项目配置
+├── .env.example                  # 环境变量示例
+└── .gitignore
 ```
 
-### 1. 配置环境变量
+---
+
+## 技术栈
+
+| 类别 | 当前实现 |
+| --- | --- |
+| Web 框架 | FastAPI + Uvicorn |
+| 配置 | Pydantic Settings |
+| ORM | SQLAlchemy 2.x |
+| 数据库 | MySQL |
+| 向量库 | Qdrant |
+| LLM | OpenAI SDK 兼容接口 |
+| Embedding | OpenAI Embedding |
+| 文档解析 | pypdf、python-docx、html2text、pandas |
+| 异步驱动 | aiomysql |
+| 容器编排 | Docker Compose |
+
+## 从 0 开始启动项目
+
+### 1. 准备 Python 环境
+
+```bash
+cd code
+mamba create -n knowledge_qa python=3.11
+mamba activate knowledge_qa
+```
+
+### 2. 安装依赖
+
+```bash
+cd knowledge_qa
+pip install -e .
+```
+
+### 3. 准备 `.env`
+
+如果没有 `.env`，先复制模板：
 
 ```bash
 cp .env.example .env
-# 编辑 .env，填入 OPENAI_API_KEY 和 MySQL 密码（可选）
 ```
 
-### 2. 启动所有服务
+至少检查这些配置：
+
+```env
+APP_NAME=Knowledge QA Agent
+APP_VERSION=0.1.0
+DEBUG=false
+
+DATABASE_URL=mysql+aiomysql://root:123456@localhost:3306/knowledge_qa?charset=utf8mb4
+
+OPENAI_API_KEY=your-api-key
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+
+QDRANT_HOST=localhost
+QDRANT_PORT=6400
+QDRANT_COLLECTION_NAME=knowledge_base
+```
+
+### 4. 准备依赖服务
+
+本地至少需要：
+
+- MySQL
+- Qdrant
+
+如果希望快速启动，建议直接用 Docker Compose：
 
 ```bash
-docker-compose up -d
+docker compose up -d mysql qdrant
 ```
 
-**等待 20-30 秒**（MySQL 首次启动较慢），然后验证：
+### 5. 启动应用
+
+从 `code` 目录启动：
 
 ```bash
-curl http://localhost:8000/api/v1/health
-# {"status":"ok","version":"0.1.0"}
+uvicorn knowledge_qa.main:app --reload --port 8000
 ```
 
-### 3. 访问 API 文档
-
-浏览器打开：http://localhost:8000/docs
-
-### 常用命令
+或从 `knowledge_qa` 目录启动：
 
 ```bash
-docker-compose logs -f              # 查看日志
-docker-compose restart knowledge-qa # 重启应用
-docker-compose down                 # 停止所有服务
-docker-compose exec mysql mysql -uroot -p123456  # 进入 MySQL
+uvicorn main:app --reload --port 8000
 ```
 
-### 客户端部署
+### 6. 验证
 
-将 `knowledge_qa/` 文件夹发送给客户，客户只需：
+- Swagger UI: [http://localhost:8000/docs](http://localhost:8000/docs)
+- ReDoc: [http://localhost:8000/redoc](http://localhost:8000/redoc)
+- 健康检查: [http://localhost:8000/health](http://localhost:8000/health)
 
-1. 安装 Docker
-2. 修改 `.env` 中的 `OPENAI_API_KEY`
-3. 运行 `docker-compose up -d`
+## 当前暴露的接口
 
-**详细部署文档：** 见 `README-DEPLOY.md` 和 `DEPLOY.md`
+### 系统接口
 
----
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/health` | 应用健康检查 |
 
-## 开发
+### 知识库接口
 
-### 代码格式化
+代码位置：[knowledge_base.py](file:///d:/MyWork/project-agent/code/knowledge_qa/api/knowledge_base.py)
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `POST` | `/api/v1/knowledge-bases` | 创建知识库 |
+| `GET` | `/api/v1/knowledge-bases` | 列出知识库 |
+| `GET` | `/api/v1/knowledge-bases/{kb_id}` | 获取知识库详情 |
+| `PATCH` | `/api/v1/knowledge-bases/{kb_id}` | 更新知识库 |
+| `DELETE` | `/api/v1/knowledge-bases/{kb_id}` | 删除知识库 |
+| `GET` | `/api/v1/knowledge-bases/{kb_id}/stats` | 获取知识库统计 |
+
+### 文档接口
+
+代码位置：[document.py](file:///d:/MyWork/project-agent/code/knowledge_qa/api/document.py)
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `POST` | `/api/v1/documents?knowledge_base_id={id}` | 上传并处理文档 |
+| `GET` | `/api/v1/documents?knowledge_base_id={id}` | 列出文档 |
+| `GET` | `/api/v1/documents/{doc_id}` | 获取文档详情 |
+| `DELETE` | `/api/v1/documents/{doc_id}` | 删除文档 |
+| `POST` | `/api/v1/documents/{doc_id}/reprocess` | 重新处理文档 |
+
+当前支持的上传文件类型，定义于 [document.py](file:///d:/MyWork/project-agent/code/knowledge_qa/api/document.py#L48-L57)：
+
+- `.txt`
+- `.md`
+- `.pdf`
+- `.docx`
+- `.doc`
+- `.html`
+- `.csv`
+
+### 对话接口
+
+代码位置：[chat.py](file:///d:/MyWork/project-agent/code/knowledge_qa/api/chat.py)
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `POST` | `/api/v1/chat?knowledge_base_id={id}` | 普通问答 |
+| `POST` | `/api/v1/chat/stream?knowledge_base_id={id}` | SSE 流式问答 |
+| `GET` | `/api/v1/chat/sessions?knowledge_base_id={id}` | 列出会话 |
+| `GET` | `/api/v1/chat/sessions/{session_id}` | 获取会话历史 |
+| `DELETE` | `/api/v1/chat/sessions/{session_id}` | 删除会话 |
+
+## 快速调用示例
+
+### 创建知识库
 
 ```bash
-ruff format .
-ruff check --fix .
+curl -X POST "http://localhost:8000/api/v1/knowledge-bases" \
+  -H "Content-Type: application/json" \
+  -d "{\"name\":\"产品知识库\",\"description\":\"用于测试\"}"
 ```
 
-### 类型检查
+### 上传文档
 
 ```bash
-mypy knowledge_qa/
+curl -X POST "http://localhost:8000/api/v1/documents?knowledge_base_id=1" \
+  -F "file=@./demo.pdf"
 ```
 
-### 运行测试
+### 普通问答
 
 ```bash
-pytest tests/ -v
+curl -X POST "http://localhost:8000/api/v1/chat?knowledge_base_id=1" \
+  -H "Content-Type: application/json" \
+  -d "{\"query\":\"这个知识库里都有哪些内容？\"}"
 ```
 
----
+### 流式问答
 
-## License
+```bash
+curl -N -X POST "http://localhost:8000/api/v1/chat/stream?knowledge_base_id=1" \
+  -H "Content-Type: application/json" \
+  -d "{\"query\":\"请总结这份文档的重点\"}"
+```
 
-MIT
+## 主要数据模型
+
+基于 [models.py](file:///d:/MyWork/project-agent/code/knowledge_qa/db/models.py)，当前核心实体包括：
+
+- `KnowledgeBase`
+- `Document`
+- `DocumentChunk`
+- `ChatSession`
+- `ChatMessage`
+- `PromptTemplate`
+
+### 模型关系
+
+- 一个 `KnowledgeBase` 对应多个 `Document`
+- 一个 `Document` 对应多个 `DocumentChunk`
+- 一个 `KnowledgeBase` 对应多个 `ChatSession`
+- 一个 `ChatSession` 对应多个 `ChatMessage`
+
+## 配置入口
+
+当前配置由 [config.py](file:///d:/MyWork/project-agent/code/knowledge_qa/core/config.py) 统一加载，来源是项目根目录 `.env`。
+
+主要配置项包括：
+
+- 应用配置：`APP_NAME`、`APP_VERSION`、`DEBUG`
+- 数据库配置：`DATABASE_URL`
+- LLM 配置：`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`
+- 向量库配置：`QDRANT_HOST`、`QDRANT_PORT`、`QDRANT_COLLECTION_NAME`
+- RAG 配置：`TOP_K`、`SIMILARITY_THRESHOLD`
