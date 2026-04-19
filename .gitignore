@@ -51,6 +51,7 @@ logs/
 .pytest_cache/
 .coverage
 htmlcov/
+tests/
 
 # Misc
 .DS_Store

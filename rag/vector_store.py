@@ -217,6 +217,7 @@ class QdrantStore(VectorStore):
             query_filter=filter_condition,
             limit=top_k,
             score_threshold=score_threshold,
+            with_payload=True,
         )
         
         return [

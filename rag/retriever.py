@@ -5,6 +5,7 @@
 from dataclasses import dataclass
 from typing import Optional, Callable
 import asyncio
+import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -13,12 +14,14 @@ from knowledge_qa.db.models import KnowledgeBase, DocumentChunk
 from knowledge_qa.rag.embedding import EmbeddingModel
 from knowledge_qa.rag.vector_store import VectorStore, VectorPoint, SearchResult
 from knowledge_qa.rag.reranker import (
-    BaseReranker, 
+    BaseReranker,
     CrossEncoderReranker,
     ScoreWeightedReranker,
 )
 from knowledge_qa.rag.query_rewrite import EnsembleQueryRewriter
 from knowledge_qa.rag.evaluator import RetrievalEvaluator, QualityMonitor
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -97,32 +100,34 @@ class AdvancedRAGRetriever:
     ) -> RetrievalResult:
         """检索相关切片（完整流程）"""
         collection_name = f"kb_{knowledge_base_id}"
-        
+
         # 1. 检查集合是否存在
-        if not await self.vector_store.collection_exists(collection_name):
-            return RetrievalResult(
-                query=query,
-                rewritten_queries=[query],
-                chunks=[],
-                total_chunks=0,
-            )
-        
+        try:
+            exists = await self.vector_store.collection_exists(collection_name)
+        except Exception as e:
+            logger.error(f"collection_exists failed for '{collection_name}': {e}")
+            return RetrievalResult(query=query, rewritten_queries=[query], chunks=[], total_chunks=0)
+
+        if not exists:
+            logger.warning(f"Collection '{collection_name}' does not exist, returning empty result")
+            return RetrievalResult(query=query, rewritten_queries=[query], chunks=[], total_chunks=0)
+
         # 2. 查询改写
         rewritten_queries = [query]
         if self.enable_query_rewrite and self.query_rewriter:
             try:
                 rewritten_queries = await self.query_rewriter.rewrite(query)
             except Exception as e:
-                print(f"Query rewrite failed: {e}")
+                logger.warning(f"Query rewrite failed: {e}")
                 rewritten_queries = [query]
-        
+
         # 3. 多查询并行检索
         all_candidates = await self._multi_query_search(
             queries=rewritten_queries,
             collection_name=collection_name,
             top_k=self.initial_top_k,
         )
-        
+
         # 4. 去重 + 合并候选集
         seen_ids = set()
         unique_candidates = []
@@ -130,31 +135,36 @@ class AdvancedRAGRetriever:
             if candidate.id not in seen_ids:
                 seen_ids.add(candidate.id)
                 unique_candidates.append(candidate)
-        
+
         # 5. 重排序
         if self.enable_rerank and len(unique_candidates) > 1:
             unique_candidates = await self._rerank(
                 query=query,
                 candidates=unique_candidates,
             )
-        
+
         # 6. 取 top_k
         final_chunks = unique_candidates[:top_k]
-        
-        # 7. 填充详情
-        chunks = await self._enrich_chunks(
-            candidates=final_chunks,
-            db=db,
+        logger.info(
+            f"Retrieval: {len(all_candidates)} raw → {len(unique_candidates)} unique → {len(final_chunks)} final"
+            f" (top_k={top_k}, collection={collection_name})"
         )
-        
+
+        # 7. 填充详情
+        chunks = await self._enrich_chunks(candidates=final_chunks, db=db)
+
         # 8. 质量评估
         metrics = {}
         if self.enable_evaluation:
             metrics = self._evaluate_candidates(query, final_chunks)
-        
-        # 9. 统计总数
-        total = await self.vector_store.count(collection_name)
-        
+
+        # 9. 统计总数（失败不阻断主流程）
+        try:
+            total = await self.vector_store.count(collection_name)
+        except Exception as e:
+            logger.warning(f"count failed for '{collection_name}': {e}")
+            total = len(chunks)
+
         return RetrievalResult(
             query=query,
             rewritten_queries=rewritten_queries,
@@ -180,9 +190,11 @@ class AdvancedRAGRetriever:
         all_results = []
         for result in results:
             if isinstance(result, Exception):
+                logger.error(f"Search query failed: {type(result).__name__}: {result}")
                 continue
             all_results.extend(result)
-        
+
+        logger.info(f"Multi-query search: {len(queries)} queries → {len(all_results)} raw candidates")
         return all_results
     
     async def _search_single(
@@ -194,7 +206,8 @@ class AdvancedRAGRetriever:
         """单查询检索"""
         # 向量化查询
         query_vector = await self.embedding_model.embed_text(query)
-        
+        logger.debug(f"Embedded query dim={len(query_vector)}, collection={collection_name}, top_k={top_k}")
+
         # 向量检索
         results = await self.vector_store.search(
             collection_name=collection_name,
@@ -202,7 +215,10 @@ class AdvancedRAGRetriever:
             top_k=top_k,
             score_threshold=None,  # 先不过滤
         )
-        
+        logger.debug(f"Qdrant returned {len(results)} results for query='{query[:30]}...'")
+        if results:
+            logger.debug(f"Top score={results[0].score:.4f}, payload_keys={list(results[0].payload.keys())}")
+
         return results
     
     async def _rerank(

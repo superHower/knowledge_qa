@@ -8,7 +8,6 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 import json
-import sse_starlette.sse as sse
 
 from knowledge_qa.db import get_db
 from knowledge_qa.db.models import ChatSession, ChatMessage
@@ -27,13 +26,26 @@ from knowledge_qa.core.config import settings
 router = APIRouter(prefix="/chat", tags=["对话"])
 
 
+def format_sse(event_name: str, data) -> str:
+    """格式化 SSE 消息"""
+    if isinstance(data, str):
+        payload = data
+    else:
+        payload = json.dumps(data, ensure_ascii=False)
+    return f"event: {event_name}\ndata: {payload}\n\n"
+
+
 def get_agent(knowledge_base_id: int) -> KnowledgeQAAgent:
     """获取 Agent 实例"""
     llm = OpenAILLM(
         api_key=settings.OPENAI_API_KEY,
         model=settings.OPENAI_MODEL,
     )
-    embedding = OpenAIEmbedding(api_key=settings.OPENAI_API_KEY)
+    embedding = OpenAIEmbedding(
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+        model=settings.OPENAI_EMBEDDING_MODEL,
+    )
     # 使用单例向量存储管理器
     from knowledge_qa.rag import get_vector_store
     vector_store = get_vector_store()
@@ -143,35 +155,59 @@ async def chat_stream(
                 temperature=data.temperature,
                 db=db,
             ):
-                if event["type"] == "status":
-                    yield f"event: status\ndata: {json.dumps(event)}\n\n"
-                elif event["type"] == "retrieval":
-                    yield f"event: retrieval\ndata: {json.dumps(event)}\n\n"
-                elif event["type"] == "content":
-                    yield f"event: content\ndata: {event['delta']}\n\n"
-                elif event["type"] == "done":
+                event_type = event["type"]
+
+                if event_type in {
+                    "run.start",
+                    "status",
+                    "node.start",
+                    "node.done",
+                    "retrieval",
+                    "answer.start",
+                }:
+                    yield format_sse(event_type, event)
+                elif event_type == "answer.delta":
+                    yield format_sse("answer.delta", event)
+                    # 兼容旧前端：继续输出原始文本增量事件
+                    yield format_sse("content", event["delta"])
+                elif event_type == "clarify":
+                    yield format_sse("clarify", event)
+                elif event_type == "error":
+                    yield format_sse("error", event)
+                elif event_type == "answer.done":
                     # 保存对话
                     session, message = await agent.save_conversation(
                         query=data.query,
                         answer=event["answer"],
                         session_id=data.session_id,
                         knowledge_base_id=knowledge_base_id,
-                        retrieved_chunks=[],
+                        retrieved_chunks=event.get("retrieved_chunks", []),
                         db=db,
                     )
-                    done_data = json.dumps({
+                    saved_data = {
+                        "session_id": session.id,
+                        "message_id": message.id,
+                        "answer": event["answer"],
+                    }
+                    yield format_sse("message.saved", saved_data)
+
+                    done_data = {
                         "session_id": session.id,
                         "message_id": message.id,
                         "answer": event["answer"],
                         "sources": event.get("sources", []),
-                    })
-                    yield f"event: done\ndata: {done_data}\n\n"
+                        "citations": event.get("citations", []),
+                        "confidence": event.get("confidence", 0.85),
+                    }
+                    yield format_sse("answer.done", done_data)
+                    # 兼容旧前端：保留 done 事件
+                    yield format_sse("done", done_data)
         except Exception as e:
-            error_data = json.dumps({
+            error_data = {
                 "error": str(e),
                 "type": type(e).__name__,
-            })
-            yield f"event: error\ndata: {error_data}\n\n"
+            }
+            yield format_sse("error", error_data)
     
     return StreamingResponse(
         event_generator(),

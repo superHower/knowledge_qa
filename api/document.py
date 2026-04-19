@@ -27,6 +27,8 @@ def get_document_service() -> DocumentService:
     """获取文档服务实例"""
     embedding = OpenAIEmbedding(
         api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+        model=settings.OPENAI_EMBEDDING_MODEL,
     )
     # 使用单例向量存储
     from knowledge_qa.rag import get_vector_store
