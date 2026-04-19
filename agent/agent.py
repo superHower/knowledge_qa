@@ -346,11 +346,25 @@ class KnowledgeQAAgent(BaseAgent):
         temperature: float = 0.7,
         db: Optional[AsyncSession] = None,
     ) -> AsyncGenerator[dict, None]:
-        """RAG 对话接口（流式 SSE）
+        """
+        RAG 对话接口（流式 SSE）
+        
+        支持多轮检索和条件边流程：
+        - 检索 → 生成 → 决策
+        - 置信度低 → 改写查询 → 重新检索（最多2轮）
+        - 无结果 → 澄清节点
         
         Yields:
             dict: 事件字典，包含 type 和相关数据
         """
+        from knowledge_qa.graph import get_dependencies
+        from knowledge_qa.graph.nodes import (
+            retrieve_node, generate_node, decide_node, 
+            rewrite_node, clarify_node
+        )
+        
+        deps = get_dependencies()
+        
         def emit_status(status: str, message: str = "", progress: int = 0, detail: dict | None = None):
             """发送状态事件"""
             return {
@@ -390,183 +404,212 @@ class KnowledgeQAAgent(BaseAgent):
                 "knowledge_base_id": knowledge_base_id,
             }
 
-            # ========== 节点 1: 问题分析 ==========
-            yield emit_status("thinking", "正在分析问题...", 0)
-            yield {
-                "type": "node.start",
-                "node": build_node(
-                    "analysis",
-                    "问题分析",
-                    "analysis",
-                    1,
-                    "running",
-                ),
-            }
-            yield {
-                "type": "node.done",
-                "node": build_node(
-                    "analysis",
-                    "问题分析",
-                    "analysis",
-                    1,
-                    "done",
-                    summary="已完成问题分析，准备检索知识库相关内容",
-                    detail={"query": query},
-                ),
-            }
-
-            # ========== 节点 2: 检索 ==========
-            yield emit_status("retrieving", "正在检索相关文档...", 20)
-            yield {
-                "type": "node.start",
-                "node": build_node(
-                    "retrieval",
-                    "知识库检索",
-                    "retrieval",
-                    2,
-                    "running",
-                ),
-            }
-
-            from knowledge_qa.graph.nodes import retrieve_node, decide_node
-            _state = await retrieve_node({
+            # 初始化状态
+            state = {
                 "query": query,
                 "knowledge_base_id": knowledge_base_id,
+                "session_id": session_id,
+                "conversation_history": conversation_history,
                 "top_k": top_k,
-            })
-            retrieved_chunks = _state.get("retrieved_chunks", [])
-
+                "temperature": temperature,
+                "retrieved_chunks": [],
+                "retrieval_round": 0,
+                "retrieved_sources": [],
+            }
+            
+            # ========== 节点 1: 检索 ==========
+            yield emit_status("retrieving", "正在检索相关文档...", 10)
+            yield {
+                "type": "node.start",
+                "node": build_node("retrieval", "知识库检索", "retrieval", 1, "running"),
+            }
+            
+            state = await retrieve_node(state, deps)
+            retrieved_chunks = state.get("retrieved_chunks", [])
+            
             yield {
                 "type": "retrieval",
                 "chunks": retrieved_chunks,
                 "count": len(retrieved_chunks),
+                "round": state.get("retrieval_round", 0),
             }
             yield {
                 "type": "node.done",
                 "node": build_node(
-                    "retrieval",
-                    "知识库检索",
-                    "retrieval",
-                    2,
-                    "done",
+                    "retrieval", "知识库检索", "retrieval", 1, "done",
                     summary=f"已召回 {len(retrieved_chunks)} 条相关片段",
                     detail={
                         "count": len(retrieved_chunks),
-                        "sources": [
-                            chunk.get("source", "")
-                            for chunk in retrieved_chunks[:3]
-                            if chunk.get("source")
-                        ],
+                        "sources": [chunk.get("source", "") for chunk in retrieved_chunks[:3] if chunk.get("source")],
                     },
                 ),
             }
 
-            # ========== 节点 3: 上下文构建 ==========
-            yield emit_status("context", "正在构建上下文...", 50)
+            # ========== 节点 2: 生成 ==========
+            yield emit_status("generating", "正在生成回答...", 50)
             yield {
                 "type": "node.start",
-                "node": build_node(
-                    "context",
-                    "上下文构建",
-                    "context",
-                    3,
-                    "running",
-                ),
+                "node": build_node("generate", "答案生成", "generation", 2, "running"),
             }
-
-            context = self._build_rag_context(retrieved_chunks)
-            messages = self._build_messages(query, context, conversation_history)
+            
+            state = await generate_node(state, deps)
+            full_answer = state.get("final_answer", "")
+            
             yield {
                 "type": "node.done",
                 "node": build_node(
-                    "context",
-                    "上下文构建",
-                    "context",
-                    3,
-                    "done",
-                    summary=f"已整理 {len(retrieved_chunks)} 条参考片段并组装提示消息",
-                    detail={"message_count": len(messages)},
-                ),
-            }
-
-            system_prompt = """你是一个专业的企业知识库问答助手。
-
-要求：
-1. 基于提供的上下文信息回答问题
-2. 如果上下文中没有相关信息，诚实地告知用户
-3. 回答要准确、简洁、有条理
-4. 如果涉及具体数据或政策，引用来源
-
-回答格式：
-- 首先给出直接回答
-- 然后列出参考来源（如有）"""
-
-            # ========== 节点 4: 答案生成 ==========
-            yield emit_status("generating", "正在生成回答...", 60)
-            yield {
-                "type": "answer.start",
-                "node": build_node(
-                    "answer_generation",
-                    "答案生成",
-                    "generation",
-                    4,
-                    "running",
-                    summary="开始生成最终回答",
-                ),
-            }
-
-            full_answer = ""
-            chunk_index = 0
-            async for delta in self.llm.stream_generate(
-                prompt=messages,
-                system_prompt=system_prompt,
-                temperature=temperature,
-                max_tokens=2000,
-            ):
-                full_answer += delta
-                chunk_index += 1
-                yield {
-                    "type": "answer.delta",
-                    "delta": delta,
-                    "chunk_index": chunk_index,
-                }
-
-            yield emit_status("finalizing", "正在整理最终结果...", 90)
-            sources = [
-                {
-                    "content": chunk.get("content", "")[:200],
-                    "source": chunk.get("source", ""),
-                }
-                for chunk in retrieved_chunks[:3]
-            ]
-            citations = [
-                {
-                    "content": chunk.get("content", ""),
-                    "source": chunk.get("source", ""),
-                    "relevance": chunk.get("relevance", 0),
-                }
-                for chunk in retrieved_chunks
-            ]
-
-            # 置信度决策
-            _state["current_thought"] = full_answer
-            _state = await decide_node(_state)
-            confidence = _state.get("confidence", 0.85)
-            needs_clarification = _state.get("needs_clarification", False)
-            clarification_question = _state.get("clarification_question")
-
-            yield {
-                "type": "node.done",
-                "node": build_node(
-                    "answer_generation",
-                    "答案生成",
-                    "generation",
-                    4,
-                    "done",
+                    "generate", "答案生成", "generation", 2, "done",
                     summary="回答生成完成",
                     detail={"answer_length": len(full_answer)},
                 ),
             }
+            
+            # ========== 节点 3: 决策 ==========
+            yield emit_status("deciding", "正在评估置信度...", 70)
+            yield {
+                "type": "node.start",
+                "node": build_node("decide", "置信度决策", "decision", 3, "running"),
+            }
+            
+            state = await decide_node(state, deps)
+            
+            # 处理决策结果
+            current_step = state.get("current_step", "")
+            confidence = state.get("confidence", 0.85)
+            needs_clarification = state.get("needs_clarification", False)
+            clarification_type = state.get("clarification_type", "")
+            retrieval_round = state.get("retrieval_round", 0)
+            
+            yield {
+                "type": "node.done",
+                "node": build_node(
+                    "decide", "置信度决策", "decision", 3, "done",
+                    summary=f"决策完成，置信度: {confidence:.2f}",
+                    detail={
+                        "confidence": confidence,
+                        "needs_clarification": needs_clarification,
+                        "clarification_type": clarification_type,
+                    },
+                ),
+            }
+            
+            # ========== 条件边处理 ==========
+            
+            # 需要改写查询重试
+            if current_step == "rewrite":
+                yield emit_status("rewriting", "正在改写查询...", 30)
+                yield {
+                    "type": "node.start",
+                    "node": build_node("rewrite", "查询改写", "rewrite", 3, "running"),
+                }
+                
+                state = await rewrite_node(state, deps)
+                new_query = state.get("query", "")
+                
+                yield {
+                    "type": "node.done",
+                    "node": build_node(
+                        "rewrite", "查询改写", "rewrite", 3, "done",
+                        summary=f"查询已改写为: {new_query[:30]}...",
+                        detail={"original_query": query, "rewritten_query": new_query},
+                    ),
+                }
+                
+                # 继续回到 retrieve（条件边）
+                yield emit_status("retrieving", "正在重新检索...", 40)
+                yield {
+                    "type": "node.start",
+                    "node": build_node("retrieval", "重新检索", "retrieval", 4, "running"),
+                }
+                
+                state = await retrieve_node(state, deps)
+                retrieved_chunks = state.get("retrieved_chunks", [])
+                
+                yield {
+                    "type": "retrieval",
+                    "chunks": retrieved_chunks,
+                    "count": len(retrieved_chunks),
+                    "round": state.get("retrieval_round", 0),
+                }
+                yield {
+                    "type": "node.done",
+                    "node": build_node(
+                        "retrieval", "重新检索", "retrieval", 4, "done",
+                        summary=f"重新召回 {len(retrieved_chunks)} 条相关片段",
+                    ),
+                }
+                
+                # 再次生成
+                yield emit_status("generating", "正在重新生成回答...", 60)
+                state = await generate_node(state, deps)
+                full_answer = state.get("final_answer", "")
+                
+                # 再次决策
+                yield emit_status("deciding", "正在评估置信度...", 80)
+                state = await decide_node(state, deps)
+                confidence = state.get("confidence", 0.85)
+                current_step = state.get("current_step", "")
+            
+            # 需要澄清（等待用户输入）
+            if current_step == "clarify":
+                yield emit_status("clarifying", "需要更多信息...", 90)
+                yield {
+                    "type": "node.start",
+                    "node": build_node("clarify", "澄清", "clarify", 5, "running"),
+                }
+                
+                state = await clarify_node(state, deps)
+                clarification_question = state.get("clarification_question", "请提供更多信息")
+                
+                yield {
+                    "type": "node.done",
+                    "node": build_node(
+                        "clarify", "澄清", "clarify", 5, "done",
+                        summary="等待用户输入",
+                    ),
+                }
+                
+                # 输出澄清事件
+                yield {
+                    "type": "clarify",
+                    "question": clarification_question,
+                    "clarification_type": clarification_type,
+                }
+                
+                # 构建结果
+                sources = [
+                    {"content": chunk.get("content", "")[:200], "source": chunk.get("source", "")}
+                    for chunk in retrieved_chunks[:3]
+                ]
+                citations = [
+                    {"content": chunk.get("content", ""), "source": chunk.get("source", ""), "relevance": chunk.get("relevance", 0)}
+                    for chunk in retrieved_chunks
+                ]
+                
+                yield {
+                    "type": "answer.done",
+                    "answer": full_answer,
+                    "sources": sources,
+                    "citations": citations,
+                    "confidence": confidence,
+                    "retrieved_chunks": retrieved_chunks,
+                    "needs_clarification": True,
+                    "clarification_question": clarification_question,
+                }
+                return
+            
+            # 正常结束流程
+            yield emit_status("finalizing", "正在整理结果...", 95)
+            
+            sources = [
+                {"content": chunk.get("content", "")[:200], "source": chunk.get("source", "")}
+                for chunk in retrieved_chunks[:3]
+            ]
+            citations = [
+                {"content": chunk.get("content", ""), "source": chunk.get("source", ""), "relevance": chunk.get("relevance", 0)}
+                for chunk in retrieved_chunks
+            ]
+            
             yield {
                 "type": "answer.done",
                 "answer": full_answer,
@@ -574,12 +617,8 @@ class KnowledgeQAAgent(BaseAgent):
                 "citations": citations,
                 "confidence": confidence,
                 "retrieved_chunks": retrieved_chunks,
+                "needs_clarification": False,
             }
-            if needs_clarification and clarification_question:
-                yield {
-                    "type": "clarify",
-                    "question": clarification_question,
-                }
             
         except Exception as e:
             yield {
