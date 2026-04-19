@@ -1,5 +1,7 @@
 """
 API 路由 - 对话
+
+使用依赖注入模式，复用 LLM 和 Retriever 实例。
 """
 
 from typing import Optional
@@ -22,9 +24,118 @@ from knowledge_qa.agent.llm import OpenAILLM
 from knowledge_qa.rag import OpenAIEmbedding, AdvancedRAGRetriever
 from knowledge_qa.agent.tool import ToolRegistry, KnowledgeBaseTool, CalculatorTool, DateTimeTool
 from knowledge_qa.core.config import settings
+from knowledge_qa.graph import GraphDependencies, set_dependencies, create_graph
 
 router = APIRouter(prefix="/chat", tags=["对话"])
 
+
+# ============================================================
+# 依赖注入：单例 LLM 和 Retriever
+# ============================================================
+
+_llm_instance: Optional[OpenAILLM] = None
+_embedding_instance: Optional[OpenAIEmbedding] = None
+_retriever_instance: Optional[AdvancedRAGRetriever] = None
+_initialized: bool = False
+
+
+def _get_llm() -> OpenAILLM:
+    """获取或创建 LLM 单例"""
+    global _llm_instance
+    if _llm_instance is None:
+        _llm_instance = OpenAILLM(
+            api_key=settings.OPENAI_API_KEY,
+            model=settings.OPENAI_MODEL,
+        )
+    return _llm_instance
+
+
+def _get_embedding() -> OpenAIEmbedding:
+    """获取或创建 Embedding 单例"""
+    global _embedding_instance
+    if _embedding_instance is None:
+        _embedding_instance = OpenAIEmbedding(
+            api_key=settings.OPENAI_API_KEY,
+            base_url=settings.OPENAI_BASE_URL,
+            model=settings.OPENAI_EMBEDDING_MODEL,
+        )
+    return _embedding_instance
+
+
+def _get_retriever(knowledge_base_id: int) -> AdvancedRAGRetriever:
+    """获取或创建 Retriever 单例（按 knowledge_base_id）"""
+    global _retriever_instance
+    if _retriever_instance is None:
+        from knowledge_qa.rag import get_vector_store
+        vector_store = get_vector_store()
+        _retriever_instance = AdvancedRAGRetriever(
+            embedding=_get_embedding(),
+            vector_store=vector_store,
+        )
+    return _retriever_instance
+
+
+def init_graph_dependencies(knowledge_base_id: int) -> GraphDependencies:
+    """
+    初始化 Graph 依赖
+    
+    在应用启动或切换知识库时调用。
+    """
+    global _initialized
+    
+    deps = GraphDependencies(
+        llm=_get_llm(),
+        embedding=_get_embedding(),
+        retriever=_get_retriever(knowledge_base_id),
+        default_top_k=5,
+        default_temperature=0.7,
+        max_tokens=2000,
+    )
+    
+    # 设置全局依赖
+    set_dependencies(deps)
+    _initialized = True
+    
+    return deps
+
+
+def get_agent(knowledge_base_id: int) -> KnowledgeQAAgent:
+    """
+    获取 Agent 实例（复用 LLM 和工具）
+    
+    使用单例模式，避免每次请求都创建新实例。
+    """
+    # 确保依赖已初始化
+    if not _initialized:
+        init_graph_dependencies(knowledge_base_id)
+    
+    llm = _get_llm()
+    
+    # 创建工具注册表
+    registry = ToolRegistry()
+    registry.register(KnowledgeBaseTool(_get_retriever(knowledge_base_id), knowledge_base_id))
+    registry.register(CalculatorTool())
+    registry.register(DateTimeTool())
+    
+    return KnowledgeQAAgent(llm, registry)
+
+
+def get_graph(knowledge_base_id: int):
+    """
+    获取编译好的 Graph 实例
+    
+    使用依赖注入，共享 LLM 和 Retriever。
+    """
+    if not _initialized:
+        init_graph_dependencies(knowledge_base_id)
+    
+    from knowledge_qa.graph import graph as _graph
+    return _graph
+
+
+# ============================================================
+# API 路由
+# ============================================================
 
 def format_sse(event_name: str, data) -> str:
     """格式化 SSE 消息"""
@@ -33,31 +144,6 @@ def format_sse(event_name: str, data) -> str:
     else:
         payload = json.dumps(data, ensure_ascii=False)
     return f"event: {event_name}\ndata: {payload}\n\n"
-
-
-def get_agent(knowledge_base_id: int) -> KnowledgeQAAgent:
-    """获取 Agent 实例"""
-    llm = OpenAILLM(
-        api_key=settings.OPENAI_API_KEY,
-        model=settings.OPENAI_MODEL,
-    )
-    embedding = OpenAIEmbedding(
-        api_key=settings.OPENAI_API_KEY,
-        base_url=settings.OPENAI_BASE_URL,
-        model=settings.OPENAI_EMBEDDING_MODEL,
-    )
-    # 使用单例向量存储管理器
-    from knowledge_qa.rag import get_vector_store
-    vector_store = get_vector_store()
-    retriever = AdvancedRAGRetriever(embedding, vector_store)
-    
-    # 创建工具注册表
-    registry = ToolRegistry()
-    registry.register(KnowledgeBaseTool(retriever, knowledge_base_id))
-    registry.register(CalculatorTool())
-    registry.register(DateTimeTool())
-    
-    return KnowledgeQAAgent(llm, registry)
 
 
 @router.post("", response_model=ChatMessageResponse)
